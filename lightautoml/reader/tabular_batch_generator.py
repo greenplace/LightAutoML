@@ -278,6 +278,9 @@ class DfBatchGenerator(BatchGenerator):
 
 
 class SqlEngineInfo:
+    """
+    SQL database description
+    """
     connection_string: str
     query: str
 
@@ -285,6 +288,16 @@ class SqlEngineInfo:
 @record_history(enabled=False)
 class SqlBatchGenerator(DfBatchGenerator):
     def __init__(self, connection_string: str, query: str, n_jobs: int = 1, batch_size: int = None):
+        """
+
+        Data batch generator for SQL connection
+
+        Args:
+            connection_string: database url; for reference see https://docs.sqlalchemy.org/en/13/core/engines.html#database-urls
+            query: SQL query to obtain data from
+            n_jobs: number of processes reading the data
+            batch_size: batch size
+        """
         self.engine = create_engine(connection_string)
         self.query = query
 
