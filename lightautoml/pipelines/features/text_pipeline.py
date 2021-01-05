@@ -44,6 +44,7 @@ class NLPDataFeatures:
         self.lang = 'en'
         self.is_tokenize_autonlp = False
         self.use_stem = False
+        self.use_inverse_index = False
         self.verbose = False
         self.bert_model = _model_name_by_lang[self.lang]
         self.random_state = 42
@@ -81,7 +82,7 @@ class TextAutoFeatures(FeaturesPipeline, NLPDataFeatures):
                 transforms.append(ConcatTextTransformer())
             if self.is_tokenize_autonlp:
                 transforms.append(TokenizerTransformer(
-                    tokenizer=_tokenizer_by_lang[self.lang](is_stemmer=self.use_stem, stopwords=self.stopwords)))
+                    tokenizer=_tokenizer_by_lang[self.lang](is_stemmer=self.use_stem, stopwords=self.stopwords, use_inverse_index=self.use_inverse_index)))
             transforms.append(
                 AutoNLPWrap(model_name=self.model_name, embedding_model=self.embedding_model,
                             cache_dir=self.cache_dir, bert_model=self.bert_model, transformer_params=self.transformer_params,
@@ -109,7 +110,7 @@ class NLPTFiDFFeatures(FeaturesPipeline, NLPDataFeatures):
         if len(texts) > 0:
             transforms = [
                 ColumnsSelector(keys=texts),
-                TokenizerTransformer(tokenizer=_tokenizer_by_lang[self.lang](is_stemmer=self.use_stem, stopwords=self.stopwords)),
+                TokenizerTransformer(tokenizer=_tokenizer_by_lang[self.lang](is_stemmer=self.use_stem, stopwords=self.stopwords, use_inverse_index=self.use_inverse_index)),
                 TfidfTextTransformer(default_params=self.tfidf_params, subs=None, random_state=42)]
             if self.svd:
                 transforms.append(SVDTransformer(n_components=self.n_components))
