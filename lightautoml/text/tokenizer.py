@@ -30,7 +30,7 @@ class BaseTokenizer:
     _fit_checks = ()
     _transform_checks = ()
 
-    def __init__(self, n_jobs: int = 4, to_string: bool = True, **kwargs: Any):
+    def __init__(self, n_jobs: int = 4, to_string: bool = True, use_inverse_index: bool = False, **kwargs: Any):
         """Tokenization with simple text cleaning and preprocessing.
 
         Args:
@@ -41,6 +41,30 @@ class BaseTokenizer:
         super().__init__(**kwargs)
         self.n_jobs = n_jobs
         self.to_string = to_string
+
+        self.stopwords = False
+        self.use_inverse_index = use_inverse_index
+        self.linedelimeter = ''
+        self.worddelimeter = ''
+        self.token_linedelimeter = ''
+        self.token_worddelimeter = ''
+
+    def _get_delimeters(self, snt: List[str]):
+        delim_array = []
+        chars = set(''.join(snt))
+        if isinstance(self.stopwords, (tuple, list, set)):
+            chars = chars | set(''.join(self.stopwords))
+        for i in range(1,31):
+            if chr(i) not in chars:
+                delim_array.append(chr(i))
+                if len(delim_array) == 2:
+                    return delim_array
+        for i in range(20000,30000):
+            if chr(i) not in chars:
+                delim_array.append(chr(i))
+                if len(delim_array) == 2:
+                    return delim_array
+        return delim_array
 
     def preprocess_sentence(self, snt: str) -> str:
         """Preprocess sentence string (lowercase, etc.).
@@ -131,10 +155,49 @@ class BaseTokenizer:
             resulting tokenized list.
 
         """
+
+        if self.use_inverse_index:
+            # Get 2 unique chars
+            delimeters = self._get_delimeters(text)
+            self.linedelimeter, self.worddelimeter = delimeters[0], delimeters[1]
+            # Get tokenized chars
+            self.token_linedelimeter, self.token_worddelimeter = self._tokenize(self.linedelimeter), self._tokenize(self.worddelimeter)
+            # Get one array from list
+            fulldata = (' '+self.linedelimeter+' ').join(text).split(' ')
+            # Create uniq list (u) and inverse index (indices)
+            indices = [0 for _ in fulldata]
+            counter = {}
+            for idx, word in enumerate(fulldata):
+                try:
+                    indices[idx] = counter[word]
+                except:
+                    pos = len(counter)
+                    counter[word] = pos
+                    indices[idx] = pos
+            u = ['' for _ in counter.keys()]
+            for key in counter.keys():
+                u[counter[key]] = key
+
+            del fulldata
+            # Split to some jobs if nessesary
+            text = [(' '+self.worddelimeter+' ').join(part) for part in self._get_chanks(list(u), self.n_jobs)]
+
         if self.n_jobs == 1:
             res = self._tokenize_singleproc(text)
         else:
             res = self._tokenize_multiproc(text)
+
+        if self.use_inverse_index:
+            data = res
+            if self.to_string:
+                data = [node.split(self.token_worddelimeter) for node in res]
+            elements = []
+            [elements.extend(node) for node in data]
+            lines = [elements[i] for i in indices]
+            res = ' '.join(lines).split(self.token_linedelimeter)
+            if not self.to_string:
+                res = [node.split(' ') for node in res]
+
         return res
 
     def _tokenize_singleproc(self, snt: List[str]) -> List[str]:
@@ -149,6 +212,11 @@ class BaseTokenizer:
         """
         return [self._tokenize(x) for x in snt]
 
+    def _get_chanks(self, snt: List[str], n: int):
+        idx = list(range(0, len(snt), len(snt) // n + 1)) + [len(snt)]
+        parts = [snt[i: j] for (i, j) in zip(idx[:-1], idx[1:])]
+        return parts
+
     def _tokenize_multiproc(self, snt: List[str]) -> List[str]:
         """Multiproc version of tokenization.
 
@@ -159,9 +227,7 @@ class BaseTokenizer:
             list of tokenized texts.
 
         """
-        idx = list(range(0, len(snt), len(snt) // self.n_jobs + 1)) + [len(snt)]
-
-        parts = [snt[i: j] for (i, j) in zip(idx[:-1], idx[1:])]
+        parts = self._get_chanks(snt, self.n_jobs)
 
         f = partial(tokenizer_func, tokenizer=self)
         with Pool(self.n_jobs) as p:
@@ -178,7 +244,7 @@ class BaseTokenizer:
 class SimpleRuTokenizer(BaseTokenizer):
     """Russian tokenizer."""
 
-    def __init__(self, n_jobs: int = 4, to_string: bool = True,
+    def __init__(self, n_jobs: int = 4, to_string: bool = True, use_inverse_index: bool = False, 
                  stopwords: Optional[Union[bool, Sequence[str]]] = False,
                  is_stemmer: bool = True, **kwargs: Any):
         """Tokenizer for Russian language.
@@ -196,6 +262,7 @@ class SimpleRuTokenizer(BaseTokenizer):
         super().__init__(n_jobs, **kwargs)
         self.n_jobs = n_jobs
         self.to_string = to_string
+        self.use_inverse_index = use_inverse_index
         if isinstance(stopwords, (tuple, list, set)):
             self.stopwords = set(stopwords)
         elif stopwords:
@@ -222,7 +289,7 @@ class SimpleRuTokenizer(BaseTokenizer):
 
         """
         snt = snt.strip()
-        s = re.sub('[^A-Za-zА-Яа-я0-9]+', ' ', snt)
+        s = re.sub('[^A-Za-zА-Яа-я0-9' + self.linedelimeter + self.worddelimeter + ']+', ' ', snt)
         s = re.sub(r'^\d+\s|\s\d+\s|\s\d+$', ' ', s)
         return s
 
@@ -249,8 +316,8 @@ class SimpleRuTokenizer(BaseTokenizer):
 
         """
 
-        filtered_s = []
-        for w in snt:
+        filtered_s = ['' for _ in snt]
+        for idx, w in enumerate(snt):
 
             # ignore numbers
             if w.isdigit():
@@ -258,14 +325,17 @@ class SimpleRuTokenizer(BaseTokenizer):
             elif w.lower() in self.stopwords:
                 pass
             elif w.lower() in ABBREVIATIONS:
-                filtered_s.extend(ABBREVIATIONS[w.lower()].split())
-            elif self._is_abbr(w):
-                filtered_s.append(w)
+                # filtered_s.extend(ABBREVIATIONS[w.lower()].split())
+                filtered_s[idx] = ABBREVIATIONS[w.lower()]
+            elif self._is_abbr(w) or w in [self.worddelimeter, self.linedelimeter]:
+                # filtered_s.append(w)
+                filtered_s[idx] = w
             # ignore short words
             elif len(w) < 2:
                 pass
             elif w.isalpha():
-                filtered_s.append(w.lower())
+                # filtered_s.append(w.lower())
+                filtered_s[idx] = w.lower()
         return filtered_s
 
     def postprocess_tokens(self, snt: List[str]) -> List[str]:
@@ -302,7 +372,7 @@ class SimpleRuTokenizer(BaseTokenizer):
 class SimpleEnTokenizer(BaseTokenizer):
     """English tokenizer."""
 
-    def __init__(self, n_jobs: int = 4, to_string: bool = True,
+    def __init__(self, n_jobs: int = 4, to_string: bool = True, use_inverse_index: bool = False,
                  stopwords: Optional[Union[bool, Sequence[str]]] = False,
                  is_stemmer: bool = True, **kwargs: Any):
         """Tokenizer for English language.
@@ -318,6 +388,7 @@ class SimpleEnTokenizer(BaseTokenizer):
         super().__init__(n_jobs, **kwargs)
         self.n_jobs = n_jobs
         self.to_string = to_string
+        self.use_inverse_index = use_inverse_index
         if isinstance(stopwords, (tuple, list, set)):
             self.stopwords = set(stopwords)
         elif stopwords:
@@ -362,10 +433,11 @@ class SimpleEnTokenizer(BaseTokenizer):
 
         """
         if len(self.stopwords) > 0:
-            filtered_s = []
-            for w in snt:
+            filtered_s = ['' for _ in snt]
+            for idx, w in enumerate(snt):
                 if w.lower() not in self.stopwords:
-                    filtered_s.append(w)
+                    # filtered_s.append(w)
+                    filtered_s[idx] = w
             return filtered_s
         else:
             return snt
