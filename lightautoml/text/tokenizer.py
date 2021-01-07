@@ -17,9 +17,34 @@ Roles = Union[Sequence[ColumnRole], ColumnRole, RolesDict, None]
 
 
 @record_history(enabled=False)
-def tokenizer_func(arr, tokenizer):
+def collapse_set_array(x):
+    chunks = get_chunks_by_len(x, 20000)
+    res = set()
+
+    for val in chunks:
+        res |= set(''.join(val))
+
+    return [res]
+
+
+@record_history(enabled=False)
+def array_func(arr, func):
     """Additional tokenizer function."""
-    return [tokenizer._tokenize(x) for x in arr]
+    x = [func(x) for x in arr]
+    return x
+
+
+def get_chunks_by_len(lst, n):
+    """Yield successive n-sized chunks from lst."""
+    for i in range(0, len(lst), n):                 
+        yield lst[i:i + n]
+
+
+def get_n_chanks(snt, n):
+    """Yield successive n chunks from lst."""
+    idx = list(range(0, len(snt), len(snt) // n + 1)) + [len(snt)]
+    parts = [snt[i: j] for (i, j) in zip(idx[:-1], idx[1:])]
+    return parts
 
 
 @record_history(enabled=False)
@@ -51,7 +76,11 @@ class BaseTokenizer:
 
     def _get_delimeters(self, snt: List[str]):
         delim_array = []
-        chars = set(''.join(snt))
+
+        vals = self._tokenize_multiproc(snt, func=collapse_set_array)
+        arr = []
+        [arr.extend(list(val))  for val in vals]
+        chars = set(arr)
         if isinstance(self.stopwords, (tuple, list, set)):
             chars = chars | set(''.join(self.stopwords))
         for i in range(1,31):
@@ -155,37 +184,39 @@ class BaseTokenizer:
             resulting tokenized list.
 
         """
-
         if self.use_inverse_index:
             # Get 2 unique chars
             delimeters = self._get_delimeters(text)
             self.linedelimeter, self.worddelimeter = delimeters[0], delimeters[1]
             # Get tokenized chars
             self.token_linedelimeter, self.token_worddelimeter = self._tokenize(self.linedelimeter), self._tokenize(self.worddelimeter)
-            # Get one array from list
-            fulldata = (' '+self.linedelimeter+' ').join(text).split(' ')
-            # Create uniq list (u) and inverse index (indices)
-            indices = [0 for _ in fulldata]
+            idx = 0
+            indices = []
             counter = {}
-            for idx, word in enumerate(fulldata):
-                try:
-                    indices[idx] = counter[word]
-                except:
-                    pos = len(counter)
-                    counter[word] = pos
-                    indices[idx] = pos
-            u = ['' for _ in counter.keys()]
+            for val in text:
+                arr = val.split()
+                arr.append(self.linedelimeter)
+                indices.extend(['']*len(arr))
+                for word in arr:
+                    try:
+                        indices[idx] = counter[word]
+                    except:
+                        pos = len(counter)
+                        counter[word] = pos
+                        indices[idx] = pos
+                    idx += 1
+            indices = indices[:-1]
+
+            u = ['']*len(counter.keys())
             for key in counter.keys():
                 u[counter[key]] = key
-
-            del fulldata
             # Split to some jobs if nessesary
-            text = [(' '+self.worddelimeter+' ').join(part) for part in self._get_chanks(list(u), self.n_jobs)]
+            text = [(' '+self.worddelimeter+' ').join(part) for part in get_n_chanks(list(u), self.n_jobs)]
 
         if self.n_jobs == 1:
             res = self._tokenize_singleproc(text)
         else:
-            res = self._tokenize_multiproc(text)
+            res = self._tokenize_multiproc(text, func=partial(array_func, func=self._tokenize))
 
         if self.use_inverse_index:
             data = res
@@ -194,7 +225,7 @@ class BaseTokenizer:
             elements = []
             [elements.extend(node) for node in data]
             lines = [elements[i] for i in indices]
-            res = ' '.join(lines).split(self.token_linedelimeter)
+            res = ' '.join(lines).split(' '+self.token_linedelimeter+' ')
             if not self.to_string:
                 res = [node.split(' ') for node in res]
 
@@ -212,12 +243,7 @@ class BaseTokenizer:
         """
         return [self._tokenize(x) for x in snt]
 
-    def _get_chanks(self, snt: List[str], n: int):
-        idx = list(range(0, len(snt), len(snt) // n + 1)) + [len(snt)]
-        parts = [snt[i: j] for (i, j) in zip(idx[:-1], idx[1:])]
-        return parts
-
-    def _tokenize_multiproc(self, snt: List[str]) -> List[str]:
+    def _tokenize_multiproc(self, snt, func):
         """Multiproc version of tokenization.
 
         Args:
@@ -227,16 +253,16 @@ class BaseTokenizer:
             list of tokenized texts.
 
         """
-        parts = self._get_chanks(snt, self.n_jobs)
+        parts = get_n_chanks(snt, self.n_jobs)
 
-        f = partial(tokenizer_func, tokenizer=self)
+        # print(func, len(snt))
         with Pool(self.n_jobs) as p:
-            res = p.map(f, parts)
-        del f
+            res = p.map(func, parts)
 
         tokens = res[0]
         for r in res[1:]:
             tokens.extend(r)
+
         return tokens
 
 
@@ -288,9 +314,9 @@ class SimpleRuTokenizer(BaseTokenizer):
             resulting string.
 
         """
-        snt = snt.strip()
-        s = re.sub('[^A-Za-zА-Яа-я0-9' + self.linedelimeter + self.worddelimeter + ']+', ' ', snt)
-        s = re.sub(r'^\d+\s|\s\d+\s|\s\d+$', ' ', s)
+        # snt = snt.strip()
+        s = re.sub('[^A-Za-zА-Яа-я0-9' + self.linedelimeter + self.worddelimeter + ' ]+', '  ', snt)
+        s = re.sub(r'^\d+\s|\s\d+\s|\s\d+$', '  ', s)
         return s
 
     def tokenize_sentence(self, snt: str) -> List[str]:
@@ -303,7 +329,7 @@ class SimpleRuTokenizer(BaseTokenizer):
             resulting list of tokens.
 
         """
-        return snt.split(' ')
+        return snt.split()
 
     def filter_tokens(self, snt: List[str]) -> List[str]:
         """Clean list of sentence tokens.
@@ -316,7 +342,7 @@ class SimpleRuTokenizer(BaseTokenizer):
 
         """
 
-        filtered_s = ['' for _ in snt]
+        filtered_s = [''] * len(snt)
         for idx, w in enumerate(snt):
 
             # ignore numbers
