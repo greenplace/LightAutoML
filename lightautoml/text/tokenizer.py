@@ -222,6 +222,7 @@ class SimpleRuTokenizer(BaseTokenizer):
 
         """
         snt = snt.strip()
+        snt = snt.replace('Ё', 'Е').replace('ё', 'е')
         s = re.sub('[^A-Za-zА-Яа-я0-9]+', ' ', snt)
         s = re.sub(r'^\d+\s|\s\d+\s|\s\d+$', ' ', s)
         return s
@@ -293,9 +294,9 @@ class SimpleRuTokenizer(BaseTokenizer):
             resulting string.
 
         """
-        snt = snt.replace('не ', 'не')
-        snt = snt.replace('ни ', 'ни')
-        return snt
+        snt = (' '+snt).replace(' не ', ' не')
+        snt = snt.replace(' ни ', ' ни')
+        return snt[1:]
 
 
 @record_history(enabled=False)
